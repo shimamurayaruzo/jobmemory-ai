@@ -1,0 +1,13 @@
+{
+  "name": "sjb-block",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "wp-scripts start src/block/block.js",
+    "build": "wp-scripts build src/block/block.js"
+  },
+  "devDependencies": {
+    "@wordpress/scripts": "^27.1.0",
+    "sass": "^1.80.3"
+  }
+}
