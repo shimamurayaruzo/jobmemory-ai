@@ -114,6 +114,128 @@ class JMAI_AI_Client {
 		);
 	}
 
+	/**
+	 * フィードバックを元に選択中のパターンを1つだけ再生成する。
+	 */
+	public function regenerate_single( string $current_content, string $feedback, string $pattern_key, array $params ): array {
+		$api_key = $this->get_api_key();
+		if ( empty( $api_key ) ) {
+			return array(
+				'success' => false,
+				'error'   => __( '設定画面でOpenAI APIキーを入力してください。', 'jobmemory-ai' ),
+			);
+		}
+
+		$tone_labels = array(
+			'a' => 'スタンダード（落ち着いた、信頼感のある表現）',
+			'b' => '挑戦的（情熱的で、成長機会や挑戦を強調）',
+			'c' => 'カジュアル（フレンドリーで、働きやすさやチームの雰囲気を強調）',
+		);
+		$tone = $tone_labels[ $pattern_key ] ?? $tone_labels['a'];
+
+		$memory = ( new JMAI_Memory() )->get();
+
+		$prompt = <<<PROMPT
+あなたはGAIS（生成AI協会）会員企業向けの求人文作成AIです。
+
+以下の求人文に対して指摘事項が寄せられました。
+指摘内容を反映して、同じトーンのまま求人文を改善・再作成してください。
+
+【Memory】
+{$memory}
+
+【職種名】
+{$params['job_title']}
+
+【現在の求人文】
+{$current_content}
+
+【指摘事項】
+{$feedback}
+
+【トーン】
+{$tone}
+
+【出力形式】
+以下の2つのセクションに分けて出力してください。
+
+---求人文---
+改善した求人文を出力してください。構成は以下のとおりです：
+1. キャッチコピー（1行）
+2. 募集背景（2-3文）
+3. 仕事内容（3-5項目、箇条書き）
+4. 必須スキル（3-5項目、箇条書き）
+5. 歓迎スキル（2-3項目、箇条書き）
+6. この仕事・会社の魅力（3-5項目、箇条書き）
+7. 給与・待遇
+8. 求める人物像
+
+---AIアドバイス---
+この求人文をさらに良くするためのアドバイスを3〜5項目、箇条書きで出力してください。
+例：具体的な数値を入れるとより魅力的になります、○○の情報を追加すると応募率が上がります、等。
+
+日本語で出力してください。
+PROMPT;
+
+		$response = wp_remote_post(
+			self::API_URL,
+			array(
+				'timeout' => 90,
+				'headers' => array(
+					'Content-Type'  => 'application/json',
+					'Authorization' => 'Bearer ' . $api_key,
+				),
+				'body'    => wp_json_encode(
+					array(
+						'model'       => self::MODEL,
+						'messages'    => array(
+							array(
+								'role'    => 'system',
+								'content' => 'あなたはGAIS（生成AI協会）会員企業向けの求人文作成AIです。',
+							),
+							array(
+								'role'    => 'user',
+								'content' => $prompt,
+							),
+						),
+						'max_tokens'  => 2000,
+						'temperature' => 0.7,
+					)
+				),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return array(
+				'success' => false,
+				'error'   => __( '再生成に失敗しました: ', 'jobmemory-ai' ) . $response->get_error_message(),
+			);
+		}
+
+		$code = wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( 200 !== $code ) {
+			$error_msg = $body['error']['message'] ?? __( '不明なエラー', 'jobmemory-ai' );
+			return array(
+				'success' => false,
+				'error'   => __( '再生成に失敗しました: ', 'jobmemory-ai' ) . $error_msg,
+			);
+		}
+
+		$raw   = $body['choices'][0]['message']['content'] ?? '';
+		$parts = preg_split( '/---AIアドバイス---/', $raw, 2 );
+
+		$job_text = trim( preg_replace( '/^---求人文---/', '', trim( $parts[0] ?? '' ) ) );
+		$advice   = trim( $parts[1] ?? '' );
+
+		return array(
+			'success' => true,
+			'content' => $job_text,
+			'advice'  => $advice,
+		);
+	}
+
 	private function build_prompt( string $memory, array $p ): string {
 		$job_title              = $p['job_title'] ?? '';
 		$recruitment_background = $p['recruitment_background'] ?? '';

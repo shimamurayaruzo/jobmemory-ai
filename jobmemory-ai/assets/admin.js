@@ -1,6 +1,7 @@
 jQuery(document).ready(function ($) {
     var selectedPattern = 'a';
     var generatedData = {};
+    var selectedImages = [];
 
     /* ─── Tab switching ─── */
     $(document).on('click', '.jmai-tab', function () {
@@ -25,7 +26,8 @@ jQuery(document).ready(function ($) {
             return;
         }
 
-        $('#jmai-generate-btn').prop('disabled', true);
+        var $btn = $('#jmai-generate-btn');
+        btnLoading($btn, '生成中...');
         $('#jmai-loading').show();
         $('#jmai-result-area').hide();
         clearNotices();
@@ -46,7 +48,7 @@ jQuery(document).ready(function ($) {
             },
             success: function (res) {
                 $('#jmai-loading').hide();
-                $('#jmai-generate-btn').prop('disabled', false);
+                btnReset($btn);
 
                 if (res.success) {
                     generatedData = res.data;
@@ -70,22 +72,25 @@ jQuery(document).ready(function ($) {
             },
             error: function () {
                 $('#jmai-loading').hide();
-                $('#jmai-generate-btn').prop('disabled', false);
+                btnReset($btn);
                 showNotice('error', '通信エラーが発生しました。もう一度お試しください。');
             }
         });
     });
 
-    /* ─── Save feedback ─── */
+    /* ─── Save feedback & regenerate ─── */
     $('#jmai-save-feedback-btn').on('click', function () {
         var feedback = $('#jmai-feedback').val().trim();
         if (!feedback) {
-            alert('フィードバックを入力してください。');
+            alert('指摘事項を入力してください。');
             return;
         }
 
+        var currentContent = $('#pattern_' + selectedPattern).text();
         var $btn = $(this);
-        $btn.prop('disabled', true).text('保存中...');
+        var $jobBtn = $('#jmai-save-job-btn');
+        btnLoading($btn, '再作成中...');
+        $jobBtn.prop('disabled', true);
         clearNotices();
 
         $.ajax({
@@ -96,19 +101,30 @@ jQuery(document).ready(function ($) {
                 nonce: jmai.nonce,
                 job_title: generatedData.job_title || '',
                 selected_pattern: selectedPattern,
-                feedback: feedback
+                feedback: feedback,
+                current_content: currentContent
             },
             success: function (res) {
-                $btn.prop('disabled', false).text('フィードバックを保存');
+                btnReset($btn);
+                $jobBtn.prop('disabled', false);
                 if (res.success) {
+                    var pat = res.data.selected_pattern;
+                    $('#pattern_' + pat).text(res.data.regenerated);
+                    generatedData['pattern_' + pat] = res.data.regenerated;
                     showNotice('success', res.data.message);
                     $('#jmai-feedback').val('');
+
+                    if (res.data.advice) {
+                        $('#jmai-advice-content').text(res.data.advice);
+                        $('#jmai-advice-area').show();
+                    }
                 } else {
                     showNotice('error', res.data.message);
                 }
             },
             error: function () {
-                $btn.prop('disabled', false).text('フィードバックを保存');
+                btnReset($btn);
+                $jobBtn.prop('disabled', false);
                 showNotice('error', '通信エラーが発生しました。');
             }
         });
@@ -123,7 +139,9 @@ jQuery(document).ready(function ($) {
         }
 
         var $btn = $(this);
-        $btn.prop('disabled', true).text('保存中...');
+        var $fbBtn = $('#jmai-save-feedback-btn');
+        btnLoading($btn, '保存中...');
+        $fbBtn.prop('disabled', true);
         clearNotices();
 
         $.ajax({
@@ -134,10 +152,12 @@ jQuery(document).ready(function ($) {
                 nonce: jmai.nonce,
                 job_title: generatedData.job_title || '',
                 content: content,
-                selected_pattern: selectedPattern
+                selected_pattern: selectedPattern,
+                image_ids: $('#jmai-image-ids').val()
             },
             success: function (res) {
-                $btn.prop('disabled', false).text('Simple Job Boardに下書き保存');
+                btnReset($btn);
+                $fbBtn.prop('disabled', false);
                 if (res.success) {
                     var msg = res.data.message;
                     if (res.data.edit_url) {
@@ -149,11 +169,67 @@ jQuery(document).ready(function ($) {
                 }
             },
             error: function () {
-                $btn.prop('disabled', false).text('Simple Job Boardに下書き保存');
+                btnReset($btn);
+                $fbBtn.prop('disabled', false);
                 showNotice('error', '通信エラーが発生しました。');
             }
         });
     });
+
+    /* ─── Image upload ─── */
+    $('#jmai-add-image-btn').on('click', function () {
+        var frame = wp.media({
+            title: '求人に掲載する画像を選択',
+            button: { text: '画像を追加' },
+            multiple: true
+        });
+
+        frame.on('select', function () {
+            var attachments = frame.state().get('selection').toJSON();
+            $.each(attachments, function (i, attachment) {
+                var exists = selectedImages.some(function (img) {
+                    return img.id === attachment.id;
+                });
+                if (!exists) {
+                    selectedImages.push({
+                        id: attachment.id,
+                        url: attachment.sizes && attachment.sizes.thumbnail
+                            ? attachment.sizes.thumbnail.url
+                            : attachment.url
+                    });
+                }
+            });
+            renderImagePreviews();
+        });
+
+        frame.open();
+    });
+
+    $(document).on('click', '.jmai-image-remove', function () {
+        var removeId = $(this).data('id');
+        selectedImages = selectedImages.filter(function (img) {
+            return img.id !== removeId;
+        });
+        renderImagePreviews();
+    });
+
+    function renderImagePreviews() {
+        var $container = $('#jmai-images-preview');
+        $container.empty();
+
+        $.each(selectedImages, function (i, img) {
+            var badge = i === 0 ? '<span class="jmai-image-badge">アイキャッチ</span>' : '';
+            var html = '<div class="jmai-image-item">' +
+                '<img src="' + img.url + '" alt="" />' +
+                '<button type="button" class="jmai-image-remove" data-id="' + img.id + '">&times;</button>' +
+                badge +
+                '</div>';
+            $container.append(html);
+        });
+
+        var ids = selectedImages.map(function (img) { return img.id; });
+        $('#jmai-image-ids').val(ids.join(','));
+    }
 
     /* ─── Reset memory ─── */
     $('#jmai-reset-memory-btn').on('click', function () {
@@ -162,7 +238,7 @@ jQuery(document).ready(function ($) {
         }
 
         var $btn = $(this);
-        $btn.prop('disabled', true).text('リセット中...');
+        btnLoading($btn, 'リセット中...');
 
         $.ajax({
             url: jmai.ajax_url,
@@ -172,7 +248,7 @@ jQuery(document).ready(function ($) {
                 nonce: jmai.nonce
             },
             success: function (res) {
-                $btn.prop('disabled', false).text('Memoryをリセット');
+                btnReset($btn);
                 if (res.success) {
                     alert(res.data.message);
                     location.reload();
@@ -181,17 +257,34 @@ jQuery(document).ready(function ($) {
                 }
             },
             error: function () {
-                $btn.prop('disabled', false).text('Memoryをリセット');
+                btnReset($btn);
                 alert('通信エラーが発生しました。');
             }
         });
     });
 
     /* ─── Utilities ─── */
+
+    function btnLoading($btn, loadingText) {
+        $btn.data('original-text', $btn.text());
+        $btn.prop('disabled', true)
+            .addClass('jmai-btn-loading')
+            .html('<span class="jmai-btn-spinner"></span>' + loadingText);
+    }
+
+    function btnReset($btn) {
+        $btn.prop('disabled', false)
+            .removeClass('jmai-btn-loading')
+            .text($btn.data('original-text'));
+    }
+
     function showNotice(type, message) {
         var cssClass = type === 'success' ? 'notice-success' : 'notice-error';
         var html = '<div class="notice ' + cssClass + ' is-dismissible"><p>' + message + '</p></div>';
         $('#jmai-notices').html(html);
+        $('html, body').animate({
+            scrollTop: $('#jmai-notices').offset().top - 100
+        }, 300);
     }
 
     function clearNotices() {
