@@ -236,10 +236,97 @@ PROMPT;
 		);
 	}
 
+	/**
+	 * Webページのテキストから企業情報をAIで抽出する。
+	 *
+	 * @return array|WP_Error
+	 */
+	public function extract_company_info( string $webpage_text ) {
+		$api_key = $this->get_api_key();
+		if ( empty( $api_key ) ) {
+			return new \WP_Error( 'no_api_key', __( '設定画面でOpenAI APIキーを入力してください。', 'jobmemory-ai' ) );
+		}
+
+		$prompt = <<<PROMPT
+以下のWebページから抽出したテキストを分析し、求人作成に必要な企業情報を抽出してください。
+
+【抽出項目】（JSON形式で出力）
+{
+  "company_strength": "会社の強み・特徴・他社との差別化ポイント（2〜3文）",
+  "business_description": "事業内容・提供サービス（2〜3文）",
+  "work_environment": "職場環境・企業文化・働き方の特徴（2〜3文）"
+}
+
+【注意事項】
+- 情報が見つからない項目は空文字 "" にしてください
+- 推測や創作はせず、テキストに記載されている情報のみ抽出してください
+- 日本語で出力してください
+- JSON以外の文字は出力しないでください
+
+【Webページテキスト】
+{$webpage_text}
+PROMPT;
+
+		$response = wp_remote_post(
+			self::API_URL,
+			array(
+				'timeout' => 60,
+				'headers' => array(
+					'Content-Type'  => 'application/json',
+					'Authorization' => 'Bearer ' . $api_key,
+				),
+				'body'    => wp_json_encode(
+					array(
+						'model'       => self::MODEL,
+						'messages'    => array(
+							array(
+								'role'    => 'system',
+								'content' => 'あなたは企業情報を抽出するアシスタントです。指定されたJSON形式でのみ回答してください。',
+							),
+							array(
+								'role'    => 'user',
+								'content' => $prompt,
+							),
+						),
+						'max_tokens'  => 1000,
+						'temperature' => 0.3,
+					)
+				),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return new \WP_Error( 'api_error', __( 'AI解析に失敗しました: ', 'jobmemory-ai' ) . $response->get_error_message() );
+		}
+
+		$code = wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( 200 !== $code ) {
+			$error_msg = $body['error']['message'] ?? __( '不明なエラー', 'jobmemory-ai' );
+			return new \WP_Error( 'api_error', __( 'AI解析に失敗しました: ', 'jobmemory-ai' ) . $error_msg );
+		}
+
+		$content = $body['choices'][0]['message']['content'] ?? '';
+
+		if ( preg_match( '/\{[\s\S]*\}/', $content, $matches ) ) {
+			$content = $matches[0];
+		}
+
+		$data = json_decode( $content, true );
+
+		if ( JSON_ERROR_NONE !== json_last_error() ) {
+			return new \WP_Error( 'parse_error', __( 'AIの応答を解析できませんでした。', 'jobmemory-ai' ) );
+		}
+
+		return $data;
+	}
+
 	private function build_prompt( string $memory, array $p ): string {
 		$job_title              = $p['job_title'] ?? '';
 		$recruitment_background = $p['recruitment_background'] ?? '';
 		$job_description        = $p['job_description'] ?? '';
+		$business_description   = $p['business_description'] ?? '';
 		$company_strengths      = $p['company_strengths'] ?? '';
 		$work_culture           = $p['work_culture'] ?? '';
 		$salary_benefits        = $p['salary_benefits'] ?? '';
@@ -255,6 +342,7 @@ PROMPT;
 職種名: {$job_title}
 募集背景: {$recruitment_background}
 仕事内容の補足: {$job_description}
+事業内容: {$business_description}
 自社の強み・魅力: {$company_strengths}
 職場環境・カルチャー: {$work_culture}
 給与・待遇: {$salary_benefits}
