@@ -192,6 +192,9 @@ jQuery(document).ready(function ($) {
         var cssClass = type === 'success' ? 'notice-success' : 'notice-error';
         var html = '<div class="notice ' + cssClass + ' is-dismissible"><p>' + message + '</p></div>';
         $('#jmai-notices').html(html);
+        $('html, body').animate({
+            scrollTop: $('#jmai-notices').offset().top - 100
+        }, 300);
     }
 
     function clearNotices() {

@@ -173,10 +173,10 @@ class JMAI_Admin {
                         <button type="button" class="button" id="jmai-save-feedback-btn">フィードバックを保存</button>
                         <button type="button" class="button button-primary" id="jmai-save-job-btn">Simple Job Boardに下書き保存</button>
                     </div>
+
+                    <div id="jmai-notices"></div>
                 </div>
             </div>
-
-            <div id="jmai-notices"></div>
         </div>
         <?php
     }
