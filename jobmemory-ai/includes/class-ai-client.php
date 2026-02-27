@@ -1,99 +1,129 @@
 <?php
 
 if ( ! defined( 'ABSPATH' ) ) {
-    exit;
+	exit;
 }
 
 class JMAI_AI_Client {
 
-    private const API_URL = 'https://api.openai.com/v1/chat/completions';
-    private const MODEL   = 'gpt-4o-mini';
+	private const API_URL = 'https://api.openai.com/v1/chat/completions';
+	private const MODEL   = 'gpt-4o-mini';
 
-    private function get_api_key(): string {
-        return get_option( 'jmai_openai_api_key', '' );
-    }
+	private function get_api_key(): string {
+		return get_option( 'jmai_openai_api_key', '' );
+	}
 
-    public function generate( array $params ): array {
-        $api_key = $this->get_api_key();
-        if ( empty( $api_key ) ) {
-            return [
-                'success' => false,
-                'error'   => '設定画面でOpenAI APIキーを入力してください。',
-            ];
-        }
+	/**
+	 * OpenAI API にテストリクエストを送り、APIキーが有効か検証する。
+	 */
+	public static function validate_api_key( string $api_key ): bool {
+		if ( empty( $api_key ) ) {
+			return false;
+		}
 
-        $memory = ( new JMAI_Memory() )->get();
-        $prompt = $this->build_prompt( $memory, $params );
+		$response = wp_remote_get(
+			'https://api.openai.com/v1/models',
+			array(
+				'timeout' => 15,
+				'headers' => array(
+					'Authorization' => 'Bearer ' . $api_key,
+				),
+			)
+		);
 
-        $response = wp_remote_post( self::API_URL, [
-            'timeout' => 90,
-            'headers' => [
-                'Content-Type'  => 'application/json',
-                'Authorization' => 'Bearer ' . $api_key,
-            ],
-            'body' => wp_json_encode( [
-                'model'       => self::MODEL,
-                'messages'    => [
-                    [
-                        'role'    => 'system',
-                        'content' => 'あなたはGAIS（生成AI協会）会員企業向けの求人文作成AIです。',
-                    ],
-                    [
-                        'role'    => 'user',
-                        'content' => $prompt,
-                    ],
-                ],
-                'max_tokens'  => 4000,
-                'temperature' => 0.7,
-            ] ),
-        ] );
+		if ( is_wp_error( $response ) ) {
+			return false;
+		}
 
-        if ( is_wp_error( $response ) ) {
-            $msg = $response->get_error_message();
-            if ( str_contains( $msg, 'timed out' ) || str_contains( $msg, 'cURL error 28' ) ) {
-                return [
-                    'success' => false,
-                    'error'   => '生成がタイムアウトしました。もう一度お試しください。',
-                ];
-            }
-            return [
-                'success' => false,
-                'error'   => '生成に失敗しました: ' . $msg,
-            ];
-        }
+		return 200 === wp_remote_retrieve_response_code( $response );
+	}
 
-        $code = wp_remote_retrieve_response_code( $response );
-        $body = json_decode( wp_remote_retrieve_body( $response ), true );
+	public function generate( array $params ): array {
+		$api_key = $this->get_api_key();
+		if ( empty( $api_key ) ) {
+			return array(
+				'success' => false,
+				'error'   => __( '設定画面でOpenAI APIキーを入力してください。', 'jobmemory-ai' ),
+			);
+		}
 
-        if ( $code !== 200 ) {
-            $error_msg = $body['error']['message'] ?? '不明なエラー';
-            return [
-                'success' => false,
-                'error'   => '生成に失敗しました: ' . $error_msg,
-            ];
-        }
+		$memory = ( new JMAI_Memory() )->get();
+		$prompt = $this->build_prompt( $memory, $params );
 
-        $content  = $body['choices'][0]['message']['content'] ?? '';
-        $patterns = $this->parse_patterns( $content );
+		$response = wp_remote_post(
+			self::API_URL,
+			array(
+				'timeout' => 90,
+				'headers' => array(
+					'Content-Type'  => 'application/json',
+					'Authorization' => 'Bearer ' . $api_key,
+				),
+				'body'    => wp_json_encode(
+					array(
+						'model'       => self::MODEL,
+						'messages'    => array(
+							array(
+								'role'    => 'system',
+								'content' => 'あなたはGAIS（生成AI協会）会員企業向けの求人文作成AIです。',
+							),
+							array(
+								'role'    => 'user',
+								'content' => $prompt,
+							),
+						),
+						'max_tokens'  => 4000,
+						'temperature' => 0.7,
+					)
+				),
+			)
+		);
 
-        return [
-            'success'   => true,
-            'pattern_a' => $patterns['a'],
-            'pattern_b' => $patterns['b'],
-            'pattern_c' => $patterns['c'],
-        ];
-    }
+		if ( is_wp_error( $response ) ) {
+			$msg = $response->get_error_message();
+			if ( str_contains( $msg, 'timed out' ) || str_contains( $msg, 'cURL error 28' ) ) {
+				return array(
+					'success' => false,
+					'error'   => __( '生成がタイムアウトしました。もう一度お試しください。', 'jobmemory-ai' ),
+				);
+			}
+			return array(
+				'success' => false,
+				'error'   => __( '生成に失敗しました: ', 'jobmemory-ai' ) . $msg,
+			);
+		}
 
-    private function build_prompt( string $memory, array $p ): string {
-        $job_title              = $p['job_title'] ?? '';
-        $recruitment_background = $p['recruitment_background'] ?? '';
-        $job_description        = $p['job_description'] ?? '';
-        $company_strengths      = $p['company_strengths'] ?? '';
-        $work_culture           = $p['work_culture'] ?? '';
-        $salary_benefits        = $p['salary_benefits'] ?? '';
-        $ideal_candidate        = $p['ideal_candidate'] ?? '';
+		$code = wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
 
-        return <<<PROMPT
+		if ( 200 !== $code ) {
+			$error_msg = $body['error']['message'] ?? __( '不明なエラー', 'jobmemory-ai' );
+			return array(
+				'success' => false,
+				'error'   => __( '生成に失敗しました: ', 'jobmemory-ai' ) . $error_msg,
+			);
+		}
+
+		$content  = $body['choices'][0]['message']['content'] ?? '';
+		$patterns = $this->parse_patterns( $content );
+
+		return array(
+			'success'   => true,
+			'pattern_a' => $patterns['a'],
+			'pattern_b' => $patterns['b'],
+			'pattern_c' => $patterns['c'],
+		);
+	}
+
+	private function build_prompt( string $memory, array $p ): string {
+		$job_title              = $p['job_title'] ?? '';
+		$recruitment_background = $p['recruitment_background'] ?? '';
+		$job_description        = $p['job_description'] ?? '';
+		$company_strengths      = $p['company_strengths'] ?? '';
+		$work_culture           = $p['work_culture'] ?? '';
+		$salary_benefits        = $p['salary_benefits'] ?? '';
+		$ideal_candidate        = $p['ideal_candidate'] ?? '';
+
+		return <<<PROMPT
 以下のMemoryと入力情報を参考に、3つの異なるトーンで求人文を作成してください。
 
 【Memory】
@@ -142,15 +172,15 @@ class JMAI_AI_Client {
 
 日本語で出力してください。
 PROMPT;
-    }
+	}
 
-    private function parse_patterns( string $content ): array {
-        $patterns = preg_split( '/---パターン[ABC]---/', $content );
+	private function parse_patterns( string $content ): array {
+		$patterns = preg_split( '/---パターン[ABC]---/', $content );
 
-        return [
-            'a' => trim( $patterns[1] ?? '' ),
-            'b' => trim( $patterns[2] ?? '' ),
-            'c' => trim( $patterns[3] ?? '' ),
-        ];
-    }
+		return array(
+			'a' => trim( $patterns[1] ?? '' ),
+			'b' => trim( $patterns[2] ?? '' ),
+			'c' => trim( $patterns[3] ?? '' ),
+		);
+	}
 }

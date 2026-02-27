@@ -28,7 +28,7 @@ class JMAI_Memory {
     }
 
     public function init_default_memory(): bool {
-        if ( $this->get() !== '' ) {
+        if ( '' !== $this->get() ) {
             return false;
         }
 
