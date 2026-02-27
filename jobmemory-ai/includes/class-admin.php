@@ -15,6 +15,7 @@ class JMAI_Admin {
 		add_action( 'wp_ajax_jmai_save_feedback', array( $this, 'ajax_save_feedback' ) );
 		add_action( 'wp_ajax_jmai_save_job', array( $this, 'ajax_save_job' ) );
 		add_action( 'wp_ajax_jmai_reset_memory', array( $this, 'ajax_reset_memory' ) );
+		add_action( 'wp_ajax_jmai_fetch_company_info', array( $this, 'ajax_fetch_company_info' ) );
 	}
 
 	public function add_menu(): void {
@@ -122,20 +123,35 @@ class JMAI_Admin {
 					</table>
 				</div>
 
-				<div class="jmai-card">
-					<h2><?php esc_html_e( '自社の魅力・優位性', 'jobmemory-ai' ); ?></h2>
-					<p class="description"><?php esc_html_e( '入力するほど良い求人文が生成されます', 'jobmemory-ai' ); ?></p>
-					<table class="form-table">
-						<tr>
-							<th><label for="recruitment_background"><?php esc_html_e( '募集背景', 'jobmemory-ai' ); ?></label></th>
+			<div class="jmai-card">
+				<h2><?php esc_html_e( '会社HPから情報を取得（任意）', 'jobmemory-ai' ); ?></h2>
+				<p class="description"><?php esc_html_e( '会社概要・採用ページのURLがおすすめです', 'jobmemory-ai' ); ?></p>
+				<div class="jmai-hp-input-row">
+					<input type="url" id="jmai-company-url" class="regular-text" placeholder="https://example.co.jp/about" />
+					<button type="button" id="jmai-fetch-hp" class="button button-secondary"><?php esc_html_e( '情報を取得', 'jobmemory-ai' ); ?></button>
+					<span id="jmai-fetch-spinner" class="spinner"></span>
+				</div>
+				<div id="jmai-fetch-message" class="jmai-message"></div>
+			</div>
+
+			<div class="jmai-card">
+				<h2><?php esc_html_e( '自社の魅力・優位性', 'jobmemory-ai' ); ?></h2>
+				<p class="description"><?php esc_html_e( '入力するほど良い求人文が生成されます。HPから取得した情報は自動入力されます。', 'jobmemory-ai' ); ?></p>
+				<table class="form-table">
+					<tr>
+						<th><label for="recruitment_background"><?php esc_html_e( '募集背景', 'jobmemory-ai' ); ?></label></th>
 							<td><textarea id="recruitment_background" name="recruitment_background" class="large-text" rows="2" placeholder="<?php esc_attr_e( '例：事業拡大のため、新規プロジェクト立ち上げのため', 'jobmemory-ai' ); ?>"></textarea></td>
 						</tr>
 						<tr>
 							<th><label for="job_description"><?php esc_html_e( '仕事内容の補足', 'jobmemory-ai' ); ?></label></th>
 							<td><textarea id="job_description" name="job_description" class="large-text" rows="2" placeholder="<?php esc_attr_e( '例：LLMを活用した社内ツール開発', 'jobmemory-ai' ); ?>"></textarea></td>
 						</tr>
-						<tr>
-							<th><label for="company_strengths"><?php esc_html_e( '自社の強み・魅力', 'jobmemory-ai' ); ?></label></th>
+					<tr>
+						<th><label for="business_description"><?php esc_html_e( '事業内容', 'jobmemory-ai' ); ?></label></th>
+						<td><textarea id="business_description" name="business_description" class="large-text" rows="2" placeholder="<?php esc_attr_e( '例：AI/DXソリューションの開発・提供', 'jobmemory-ai' ); ?>"></textarea></td>
+					</tr>
+					<tr>
+						<th><label for="company_strengths"><?php esc_html_e( '自社の強み・魅力', 'jobmemory-ai' ); ?></label></th>
 							<td><textarea id="company_strengths" name="company_strengths" class="large-text" rows="2" placeholder="<?php esc_attr_e( '例：リモートワーク可、フレックス制度、AI研修充実', 'jobmemory-ai' ); ?>"></textarea></td>
 						</tr>
 						<tr>
@@ -306,6 +322,7 @@ class JMAI_Admin {
 			'job_title'              => $job_title,
 			'recruitment_background' => sanitize_textarea_field( wp_unslash( $_POST['recruitment_background'] ?? '' ) ),
 			'job_description'        => sanitize_textarea_field( wp_unslash( $_POST['job_description'] ?? '' ) ),
+			'business_description'   => sanitize_textarea_field( wp_unslash( $_POST['business_description'] ?? '' ) ),
 			'company_strengths'      => sanitize_textarea_field( wp_unslash( $_POST['company_strengths'] ?? '' ) ),
 			'work_culture'           => sanitize_textarea_field( wp_unslash( $_POST['work_culture'] ?? '' ) ),
 			'salary_benefits'        => sanitize_textarea_field( wp_unslash( $_POST['salary_benefits'] ?? '' ) ),
@@ -470,5 +487,93 @@ class JMAI_Admin {
 		$memory->reset();
 
 		wp_send_json_success( array( 'message' => __( 'Memoryをリセットしました。', 'jobmemory-ai' ) ) );
+	}
+
+	/* ─── AJAX: 会社HP情報取得 ─── */
+
+	public function ajax_fetch_company_info(): void {
+		check_ajax_referer( 'jmai_nonce', 'nonce' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( array( 'message' => __( '権限がありません。', 'jobmemory-ai' ) ) );
+		}
+
+		$url = esc_url_raw( wp_unslash( $_POST['url'] ?? '' ) );
+
+		if ( empty( $url ) ) {
+			wp_send_json_error( array( 'message' => __( 'URLが入力されていません。', 'jobmemory-ai' ) ) );
+		}
+
+		$html = $this->fetch_webpage( $url );
+
+		if ( is_wp_error( $html ) ) {
+			wp_send_json_error( array( 'message' => $html->get_error_message() ) );
+		}
+
+		$text = $this->extract_text_from_html( $html );
+
+		if ( mb_strlen( $text ) < 100 ) {
+			wp_send_json_error( array( 'message' => __( 'ページから十分な情報を取得できませんでした。', 'jobmemory-ai' ) ) );
+		}
+
+		$client    = new JMAI_AI_Client();
+		$extracted = $client->extract_company_info( $text );
+
+		if ( is_wp_error( $extracted ) ) {
+			wp_send_json_error( array( 'message' => $extracted->get_error_message() ) );
+		}
+
+		$warning = null;
+		if ( mb_strlen( $text ) < 500 ) {
+			$warning = __( '取得した情報が少なめです。会社概要ページのURLを試すとより詳しい情報が取得できます。', 'jobmemory-ai' );
+		}
+
+		wp_send_json_success(
+			array(
+				'company_strength'     => $extracted['company_strength'] ?? '',
+				'business_description' => $extracted['business_description'] ?? '',
+				'work_environment'     => $extracted['work_environment'] ?? '',
+				'warning'              => $warning,
+			)
+		);
+	}
+
+	private function fetch_webpage( string $url ) {
+		$response = wp_remote_get(
+			$url,
+			array(
+				'timeout'    => 30,
+				'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+				'sslverify'  => true,
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return new WP_Error( 'fetch_error', __( 'ページを取得できませんでした: ', 'jobmemory-ai' ) . $response->get_error_message() );
+		}
+
+		$status_code = wp_remote_retrieve_response_code( $response );
+		if ( 200 !== $status_code ) {
+			return new WP_Error( 'fetch_error', __( 'ページを取得できませんでした（ステータス: ', 'jobmemory-ai' ) . $status_code . '）' );
+		}
+
+		return wp_remote_retrieve_body( $response );
+	}
+
+	private function extract_text_from_html( string $html ): string {
+		$html = preg_replace( '/<script\b[^>]*>(.*?)<\/script>/is', '', $html );
+		$html = preg_replace( '/<style\b[^>]*>(.*?)<\/style>/is', '', $html );
+		$html = preg_replace( '/<nav\b[^>]*>(.*?)<\/nav>/is', '', $html );
+		$html = preg_replace( '/<footer\b[^>]*>(.*?)<\/footer>/is', '', $html );
+
+		$text = wp_strip_all_tags( $html );
+		$text = preg_replace( '/\s+/', ' ', $text );
+		$text = trim( $text );
+
+		if ( mb_strlen( $text ) > 5000 ) {
+			$text = mb_substr( $text, 0, 5000 );
+		}
+
+		return $text;
 	}
 }

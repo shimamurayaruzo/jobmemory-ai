@@ -16,6 +16,69 @@ jQuery(document).ready(function ($) {
         selectedPattern = pattern;
     });
 
+    /* ─── Fetch company info from HP ─── */
+    $('#jmai-fetch-hp').on('click', function () {
+        var url = $('#jmai-company-url').val().trim();
+        var $msg = $('#jmai-fetch-message');
+
+        if (!url) {
+            $msg.removeClass('success').addClass('error').text('URLを入力してください。');
+            return;
+        }
+
+        try {
+            new URL(url);
+        } catch (_) {
+            $msg.removeClass('success').addClass('error').text('正しいURLを入力してください。');
+            return;
+        }
+
+        var $btn = $(this);
+        btnLoading($btn, '取得中...');
+        $('#jmai-fetch-spinner').addClass('is-active');
+        $msg.removeClass('success error').text('HPから情報を取得中...（10〜20秒）');
+
+        $.ajax({
+            url: jmai.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'jmai_fetch_company_info',
+                nonce: jmai.nonce,
+                url: url
+            },
+            success: function (res) {
+                btnReset($btn);
+                $('#jmai-fetch-spinner').removeClass('is-active');
+
+                if (res.success) {
+                    var data = res.data;
+                    if (data.company_strength) {
+                        $('#company_strengths').val(data.company_strength);
+                    }
+                    if (data.business_description) {
+                        $('#business_description').val(data.business_description);
+                    }
+                    if (data.work_environment) {
+                        $('#work_culture').val(data.work_environment);
+                    }
+
+                    var message = '情報を取得しました。内容を確認・編集してください。';
+                    if (data.warning) {
+                        message += '\n注意: ' + data.warning;
+                    }
+                    $msg.removeClass('error').addClass('success').text(message);
+                } else {
+                    $msg.removeClass('success').addClass('error').text('エラー: ' + res.data.message);
+                }
+            },
+            error: function () {
+                btnReset($btn);
+                $('#jmai-fetch-spinner').removeClass('is-active');
+                $msg.removeClass('success').addClass('error').text('通信エラーが発生しました。');
+            }
+        });
+    });
+
     /* ─── Generate job descriptions ─── */
     $('#jmai-generate-form').on('submit', function (e) {
         e.preventDefault();
@@ -41,6 +104,7 @@ jQuery(document).ready(function ($) {
                 job_title: jobTitle,
                 recruitment_background: $('#recruitment_background').val(),
                 job_description: $('#job_description').val(),
+                business_description: $('#business_description').val(),
                 company_strengths: $('#company_strengths').val(),
                 work_culture: $('#work_culture').val(),
                 salary_benefits: $('#salary_benefits').val(),
