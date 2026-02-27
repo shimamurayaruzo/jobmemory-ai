@@ -25,11 +25,20 @@ require_once JMAI_PLUGIN_DIR . 'includes/class-memory.php';
 require_once JMAI_PLUGIN_DIR . 'includes/class-ai-client.php';
 require_once JMAI_PLUGIN_DIR . 'includes/class-admin.php';
 
-register_activation_hook( __FILE__, function () {
-    $memory = new JMAI_Memory();
-    $memory->init_default_memory();
-} );
+register_activation_hook( __FILE__, 'jmai_activate' );
+add_action( 'plugins_loaded', 'jmai_init' );
 
-add_action( 'plugins_loaded', function () {
-    new JMAI_Admin();
-} );
+/**
+ * @return void
+ */
+function jmai_activate() {
+	$memory = new JMAI_Memory();
+	$memory->init_default_memory();
+}
+
+/**
+ * @return void
+ */
+function jmai_init() {
+	new JMAI_Admin();
+}
