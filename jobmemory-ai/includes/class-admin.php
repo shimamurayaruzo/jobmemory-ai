@@ -61,6 +61,8 @@ class JMAI_Admin {
 			return;
 		}
 
+		wp_enqueue_media();
+
 		wp_enqueue_style(
 			'jmai-admin',
 			JMAI_PLUGIN_URL . 'assets/admin.css',
@@ -178,19 +180,34 @@ class JMAI_Admin {
 					<div class="jmai-tab-content" id="pattern_c" style="display:none;"></div>
 				</div>
 
+				<div class="jmai-card" id="jmai-advice-area" style="display:none;">
+					<h2>💡 <?php esc_html_e( 'AIからのアドバイス', 'jobmemory-ai' ); ?></h2>
+					<div id="jmai-advice-content" class="jmai-advice-content"></div>
+				</div>
+
 				<div class="jmai-card">
-					<h2><?php esc_html_e( 'フィードバック（任意）', 'jobmemory-ai' ); ?></h2>
-					<p class="description"><?php esc_html_e( '改善点を入力するとMemoryに蓄積され、次回以降の生成に反映されます', 'jobmemory-ai' ); ?></p>
+					<h2><?php esc_html_e( '画像の追加', 'jobmemory-ai' ); ?></h2>
+					<p class="description"><?php esc_html_e( '求人に掲載する画像を追加できます。最初の1枚がアイキャッチ画像になります。', 'jobmemory-ai' ); ?></p>
+					<div id="jmai-images-preview" class="jmai-images-preview"></div>
+					<p>
+						<button type="button" class="button" id="jmai-add-image-btn"><?php esc_html_e( '画像を追加', 'jobmemory-ai' ); ?></button>
+					</p>
+					<input type="hidden" id="jmai-image-ids" value="" />
+				</div>
+
+				<div class="jmai-card">
+					<h2><?php esc_html_e( '求人情報の指摘事項', 'jobmemory-ai' ); ?></h2>
+					<p class="description"><?php esc_html_e( '指摘内容を元に選択中のパターンをAIが再作成します（Memoryにも蓄積されます）', 'jobmemory-ai' ); ?></p>
 					<textarea id="jmai-feedback" class="large-text" rows="3" placeholder="<?php esc_attr_e( 'この求人文の改善点があれば入力してください', 'jobmemory-ai' ); ?>"></textarea>
 
 					<div class="jmai-actions">
-						<button type="button" class="button" id="jmai-save-feedback-btn"><?php esc_html_e( 'フィードバックを保存', 'jobmemory-ai' ); ?></button>
+						<button type="button" class="button" id="jmai-save-feedback-btn"><?php esc_html_e( '指摘を送信して再作成', 'jobmemory-ai' ); ?></button>
 						<button type="button" class="button button-primary" id="jmai-save-job-btn"><?php esc_html_e( 'Simple Job Boardに下書き保存', 'jobmemory-ai' ); ?></button>
 					</div>
+
+					<div id="jmai-notices"></div>
 				</div>
 			</div>
-
-			<div id="jmai-notices"></div>
 		</div>
 		<?php
 	}
@@ -312,7 +329,7 @@ class JMAI_Admin {
 		);
 	}
 
-	/* ─── AJAX: フィードバック保存 ─── */
+	/* ─── AJAX: フィードバック保存 & 再生成 ─── */
 
 	public function ajax_save_feedback(): void {
 		check_ajax_referer( 'jmai_nonce', 'nonce' );
@@ -324,9 +341,10 @@ class JMAI_Admin {
 		$feedback         = sanitize_textarea_field( wp_unslash( $_POST['feedback'] ?? '' ) );
 		$job_title        = sanitize_text_field( wp_unslash( $_POST['job_title'] ?? '' ) );
 		$selected_pattern = sanitize_text_field( wp_unslash( $_POST['selected_pattern'] ?? '' ) );
+		$current_content  = sanitize_textarea_field( wp_unslash( $_POST['current_content'] ?? '' ) );
 
 		if ( empty( $feedback ) ) {
-			wp_send_json_error( array( 'message' => __( 'フィードバックを入力してください。', 'jobmemory-ai' ) ) );
+			wp_send_json_error( array( 'message' => __( '指摘事項を入力してください。', 'jobmemory-ai' ) ) );
 		}
 
 		if ( ! in_array( $selected_pattern, self::ALLOWED_PATTERNS, true ) ) {
@@ -341,12 +359,31 @@ class JMAI_Admin {
 		$label = $pattern_labels[ $selected_pattern ];
 		$date  = wp_date( 'Y-m-d H:i' );
 
-		$entry = "\n[{$date}] 職種: {$job_title} / パターン: {$label}\nフィードバック: {$feedback}";
+		$entry = "\n[{$date}] 職種: {$job_title} / パターン: {$label}\n指摘事項: {$feedback}";
 
 		$memory = new JMAI_Memory();
 		$memory->append( $entry );
 
-		wp_send_json_success( array( 'message' => __( 'フィードバックを保存しました。', 'jobmemory-ai' ) ) );
+		$client = new JMAI_AI_Client();
+		$result = $client->regenerate_single(
+			$current_content,
+			$feedback,
+			$selected_pattern,
+			array( 'job_title' => $job_title )
+		);
+
+		if ( ! $result['success'] ) {
+			wp_send_json_error( array( 'message' => $result['error'] ) );
+		}
+
+		wp_send_json_success(
+			array(
+				'message'          => __( '求人文を再作成しました。', 'jobmemory-ai' ),
+				'regenerated'      => $result['content'],
+				'advice'           => $result['advice'],
+				'selected_pattern' => $selected_pattern,
+			)
+		);
 	}
 
 	/* ─── AJAX: Simple Job Boardに保存 ─── */
@@ -374,6 +411,8 @@ class JMAI_Admin {
 			wp_send_json_error( array( 'message' => __( 'Simple Job Boardプラグインが有効になっていません。', 'jobmemory-ai' ) ) );
 		}
 
+		$image_ids_raw = sanitize_text_field( wp_unslash( $_POST['image_ids'] ?? '' ) );
+
 		$post_id = wp_insert_post(
 			array(
 				'post_type'    => 'jobpost',
@@ -385,6 +424,28 @@ class JMAI_Admin {
 
 		if ( is_wp_error( $post_id ) ) {
 			wp_send_json_error( array( 'message' => __( '保存に失敗しました: ', 'jobmemory-ai' ) . $post_id->get_error_message() ) );
+		}
+
+		if ( ! empty( $image_ids_raw ) ) {
+			$image_ids = array_map( 'absint', explode( ',', $image_ids_raw ) );
+			$image_ids = array_filter( $image_ids );
+
+			foreach ( $image_ids as $index => $attachment_id ) {
+				if ( 'attachment' !== get_post_type( $attachment_id ) ) {
+					continue;
+				}
+
+				if ( 0 === $index ) {
+					set_post_thumbnail( $post_id, $attachment_id );
+				}
+
+				wp_update_post(
+					array(
+						'ID'          => $attachment_id,
+						'post_parent' => $post_id,
+					)
+				);
+			}
 		}
 
 		wp_send_json_success(
